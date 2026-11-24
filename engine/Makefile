@@ -1,4 +1,4 @@
-.PHONY: build datagen aarch64 cross-aarch64 cross-aarch64-clang
+.PHONY: build datagen aarch64 cross-aarch64 cross-aarch64-clang macos macos-arm64 macos-x86_64 macos-universal
 
 EXE := patricia
 SOURCES := src/patricia.cpp src/fathom/src/tbprobe.c
@@ -30,7 +30,10 @@ datagen: datagen/datagen.cpp
 
 # --- Native AArch64 build (on ARM host) -----------------------------------
 aarch64: CXX := clang++
-aarch64: CXXFLAGS := -O3 -std=c++20 -ffast-math -mcpu=native -pthread -static-libstdc++ -static-libgcc
+aarch64: CXXFLAGS := -O3 -std=c++20 -ffast-math -mcpu=native -pthread
+ifneq ($(DETECTED_OS), Darwin)
+aarch64: CXXFLAGS += -static-libstdc++ -static-libgcc
+endif
 aarch64: OUT := $(EXE)_aarch64$(SUFFIX)
 aarch64: $(SOURCES)
 	$(CXX) $^ $(CXXFLAGS) -o $(OUT) $(LINKER)
@@ -50,3 +53,23 @@ cross-aarch64-clang: CXXFLAGS := --target=aarch64-linux-gnu -O3 -std=c++20 -ffas
 cross-aarch64-clang: OUT := $(EXE)_aarch64$(SUFFIX)
 cross-aarch64-clang: $(SOURCES)
 	$(CXX) $(CXXFLAGS) $^ -o $(OUT)
+
+# --- macOS ----------------------------------------------------------------
+# Apple clang cannot link libstdc++/libgcc statically, and libc++ ships with
+# macOS, so these binaries only depend on system libraries.
+#   make macos            portable Apple Silicon binary (NEON, any M-series)
+#   make macos-universal  arm64 (NEON) + x86_64 (AVX2/BMI2) fat binary
+MACOS_MIN := 11.0
+MACOS_FLAGS := -O3 -std=c++20 -ffast-math -pthread -mmacosx-version-min=$(MACOS_MIN) \
+               -DINCBIN_SILENCE_BITCODE_WARNING
+
+macos: macos-arm64
+
+macos-arm64: $(SOURCES)
+	clang++ $^ -arch arm64 -mcpu=apple-m1 $(MACOS_FLAGS) -o $(EXE)-macos-arm64
+
+macos-x86_64: $(SOURCES)
+	clang++ $^ -arch x86_64 -march=haswell -mbmi2 $(MACOS_FLAGS) -o $(EXE)-macos-x86_64
+
+macos-universal: macos-arm64 macos-x86_64
+	lipo -create -output $(EXE)-macos-universal $(EXE)-macos-arm64 $(EXE)-macos-x86_64
